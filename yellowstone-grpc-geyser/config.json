@@ -8,6 +8,14 @@
     "affinity": "0-1,12-13"
   },
   "grpc": {
+    "zmq_sockets": {
+      "Slot": "PubSub_ipc:///tmp/slot.sock",
+      "Entry": "PubSub_ipc:///tmp/entry.sock",
+      "Transaction": "PubSub_ipc:///tmp/tx.sock",
+      "Account": "PubSub_ipc:///tmp/account.sock",
+      "BlockMeta": "PubSub_ipc:///tmp/blockmeta.sock",
+      "Block": "PubSub_ipc:///tmp/block.sock"
+    },
     "address": "0.0.0.0:10000",
     "tls_config": {
       "cert_path": "",
