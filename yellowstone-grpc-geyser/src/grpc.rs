@@ -3,6 +3,7 @@ use {
         config::{ConfigGrpc, ConfigTokio},
         metrics::{self, DebugClientMessage},
         version::GrpcVersionInfo,
+        zmq_manager::ZmqSocketManager,
     },
     anyhow::Context,
     log::{error, info},
@@ -320,7 +321,7 @@ impl SlotMessages {
     }
 }
 
-type BroadcastedMessage = (CommitmentLevel, Arc<Vec<(u64, Message)>>);
+pub type BroadcastedMessage = (CommitmentLevel, Arc<Vec<(u64, Message)>>);
 
 enum ReplayedResponse {
     Messages(Vec<(u64, Message)>),
@@ -384,6 +385,18 @@ impl GrpcService {
 
         // Messages to clients combined by commitment
         let (broadcast_tx, _) = broadcast::channel(config.channel_capacity);
+
+        // spawn a thread to send updates over zeromq 
+        let zmq_sockets = config.zmq_sockets.clone();
+        let broadcast_for_zmq = broadcast_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                ZmqSocketManager::start(&zmq_sockets, broadcast_for_zmq.subscribe()).await
+            {
+                log::error!("Failed to start ZmqSocketManager: {:?}", e);
+            }
+        });
+
         // attempt to prevent spam of geyser loop with capacity eq 1
         let (replay_first_available_slot, replay_stored_slots_tx, replay_stored_slots_rx) =
             if config.replay_stored_slots == 0 {

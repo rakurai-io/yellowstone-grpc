@@ -4,7 +4,7 @@ use {
     },
     serde::{de, Deserialize, Deserializer},
     std::{
-        collections::HashSet, fmt, fs::read_to_string, net::SocketAddr, path::Path, str::FromStr,
+        collections::{HashMap,HashSet}, fmt, fs::read_to_string, net::SocketAddr, path::Path, str::FromStr,
         time::Duration,
     },
     tokio::sync::Semaphore,
@@ -134,6 +134,7 @@ fn parse_taskset(taskset: &str) -> Result<Vec<usize>, String> {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigGrpc {
+    pub zmq_sockets: HashMap<String, String>,
     /// Address of Grpc service.
     pub address: SocketAddr,
     /// TLS config

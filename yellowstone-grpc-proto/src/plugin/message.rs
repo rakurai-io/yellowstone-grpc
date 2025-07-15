@@ -533,6 +533,41 @@ impl MessageBlock {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MessageType {
+    Slot,
+    Account,
+    Transaction,
+    Entry,
+    BlockMeta,
+    Block,
+}
+
+impl MessageType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MessageType::Slot => "Slot",
+            MessageType::Account => "Account",
+            MessageType::Transaction => "Transaction",
+            MessageType::Entry => "Entry",
+            MessageType::BlockMeta => "BlockMeta",
+            MessageType::Block => "Block",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "Slot" => Some(Self::Slot),
+            "Account" => Some(Self::Account),
+            "Transaction" => Some(Self::Transaction),
+            "Entry" => Some(Self::Entry),
+            "BlockMeta" => Some(Self::BlockMeta),
+            "Block" => Some(Self::Block),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     Slot(MessageSlot),
@@ -552,6 +587,28 @@ impl Message {
             Self::Entry(msg) => msg.slot,
             Self::BlockMeta(msg) => msg.slot,
             Self::Block(msg) => msg.meta.slot,
+        }
+    }
+
+    pub fn get_type(&self) -> &'static str {
+        match self {
+            Self::Slot(_) => "Slot",
+            Self::Account(_) => "Account",
+            Self::Transaction(_) => "Transaction",
+            Self::Entry(_) => "Entry",
+            Self::BlockMeta(_) => "BlockMeta",
+            Self::Block(_) => "Block",
+        }
+    }
+
+    pub fn get_type_enum(&self) -> MessageType {
+        match self {
+            Message::Slot(_) => MessageType::Slot,
+            Message::Account(_) => MessageType::Account,
+            Message::Transaction(_) => MessageType::Transaction,
+            Message::Entry(_) => MessageType::Entry,
+            Message::BlockMeta(_) => MessageType::BlockMeta,
+            Message::Block(_) => MessageType::Block,
         }
     }
 

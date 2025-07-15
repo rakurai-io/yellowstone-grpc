@@ -16,6 +16,10 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "config-check"
 
+[[bin]]
+name = "reader"
+path = "src/bin/reader.rs"
+
 [dependencies]
 affinity = { workspace = true }
 agave-geyser-plugin-interface = { workspace = true }
@@ -23,8 +27,10 @@ anyhow = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
 bs58 = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
+flexi_logger = "0.31.2"
 futures = { workspace = true }
 hostname = { workspace = true }
 http = { workspace = true }
@@ -49,6 +55,8 @@ tokio-stream = { workspace = true }
 tonic = { workspace = true, features = ["gzip", "zstd", "tls", "tls-roots"] }
 tonic-health = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["convert", "plugin"] }
+zmq = "0.10.0"
+zstd = "0.13.3"
 
 [build-dependencies]
 anyhow = { workspace = true }

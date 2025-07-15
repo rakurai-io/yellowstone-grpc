@@ -3,6 +3,7 @@ pub mod grpc;
 pub mod metrics;
 pub mod plugin;
 pub mod version;
+pub mod zmq_manager;
 
 pub fn get_thread_name() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
