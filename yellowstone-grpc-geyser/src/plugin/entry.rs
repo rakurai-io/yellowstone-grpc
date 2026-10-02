@@ -76,9 +76,8 @@ impl PluginInner {
 
     // Sends messages to the block reconstruction loop
     fn send_block_reconstruction_message(&self, message: BlockReconstructionMessage) {
-        if self.block_reconstruction_channel.send(message).is_ok() {
-            metrics::block_reconstruction_queue_size_inc();
-        }
+        let _ = message;
+        let _ = &self.block_reconstruction_channel;
     }
 
     // Sends messages to all subscribed clients if their filter matches the message.
@@ -317,13 +316,15 @@ impl GeyserPlugin for Plugin {
                 }
             }
 
-            let message = Message::Account(Arc::new(MessageAccount::from_geyser(
-                account,
-                slot,
-                false,
-                Some(bank_id),
-            )));
-            inner.send_message(message);
+            if inner.broadcast_channel.has_subscriber() {
+                let message = Message::Account(Arc::new(MessageAccount::from_geyser(
+                    account,
+                    slot,
+                    false,
+                    Some(bank_id),
+                )));
+                inner.send_message(message);
+            }
             Ok(())
         })
     }
@@ -623,23 +624,23 @@ impl GeyserPlugin for Plugin {
     }
 
     fn transaction_notifications_enabled(&self) -> bool {
-        true
+        false
     }
 
     fn entry_notifications_enabled(&self) -> bool {
-        true
+        false
     }
 
     fn deshred_transaction_notifications_enabled(&self) -> bool {
-        true
+        false
     }
 
     fn deshred_transaction_alt_resolution_enabled(&self) -> bool {
-        true
+        false
     }
 
     fn block_footer_notifications_enabled(&self) -> bool {
-        true
+        false
     }
 }
 

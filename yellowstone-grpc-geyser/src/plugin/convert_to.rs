@@ -226,8 +226,24 @@ pub fn create_rewards_obj(rewards: &[Reward], num_partitions: Option<u64>) -> pr
     }
 }
 
+/// Base58 pubkeys are ~32–44 chars. A huge `String` len here is a corrupt or
+/// ABI-misaligned `Reward` (seen as ~135 TB at epoch); cloning it aborts the
+/// validator via `rust_oom`.
+const MAX_REWARD_PUBKEY_CHARS: usize = 64;
+
 pub fn create_rewards(rewards: &[Reward]) -> Vec<proto::Reward> {
-    rewards.iter().map(create_reward).collect()
+    let mut out = Vec::with_capacity(rewards.len());
+    for reward in rewards {
+        if reward.pubkey.len() > MAX_REWARD_PUBKEY_CHARS {
+            log::error!(
+                "dropping remaining geyser rewards: pubkey len {} is not a valid pubkey string",
+                reward.pubkey.len()
+            );
+            break;
+        }
+        out.push(create_reward(reward));
+    }
+    out
 }
 
 pub fn create_reward(reward: &Reward) -> proto::Reward {

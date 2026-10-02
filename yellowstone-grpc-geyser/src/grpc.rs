@@ -349,6 +349,12 @@ impl SubscriberChannels {
         let _ = self.sender(commitment).send(messages);
     }
 
+    pub fn has_subscriber(&self) -> bool {
+        self.processed.receiver_count() > 0
+            || self.confirmed.receiver_count() > 0
+            || self.finalized.receiver_count() > 0
+    }
+
     #[inline]
     pub fn subscribe(
         &self,
@@ -1279,7 +1285,7 @@ impl GrpcService {
     async fn geyser_loop<St>(
         mut messages_rx: St,
         broadcast: SubscriberChannels,
-        block_reconstruction_tx: mpsc::UnboundedSender<BlockReconstructionMessage>,
+        _block_reconstruction_tx: mpsc::UnboundedSender<BlockReconstructionMessage>,
     ) where
         St: BatchStream<Item = Message> + Unpin + Send + 'static,
     {
@@ -1322,23 +1328,12 @@ impl GrpcService {
                 let message_batch_arc = Arc::new(std::mem::take(&mut buffer.message_batch));
                 broadcast.send(CommitmentLevel::Processed, Arc::clone(&message_batch_arc));
                 buffer.message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
-                if block_reconstruction_tx
-                    .send(BlockReconstructionMessage::Batch(message_batch_arc))
-                    .is_ok()
-                {
-                    metrics::block_reconstruction_queue_size_inc();
-                }
+                let _ = message_batch_arc;
             }
 
             if let Some(blockmeta_message) = buffer.blockmeta_batch.take() {
                 metrics::message_queue_size_dec();
-
-                if block_reconstruction_tx
-                    .send(BlockReconstructionMessage::Single(blockmeta_message))
-                    .is_ok()
-                {
-                    metrics::block_reconstruction_queue_size_inc();
-                }
+                let _ = blockmeta_message;
             }
         }
     }
