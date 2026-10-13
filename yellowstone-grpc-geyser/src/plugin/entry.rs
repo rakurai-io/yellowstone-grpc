@@ -76,8 +76,9 @@ impl PluginInner {
 
     // Sends messages to the block reconstruction loop
     fn send_block_reconstruction_message(&self, message: BlockReconstructionMessage) {
-        let _ = message;
-        let _ = &self.block_reconstruction_channel;
+        if self.block_reconstruction_channel.send(message).is_ok() {
+            metrics::block_reconstruction_queue_size_inc();
+        }
     }
 
     // Sends messages to all subscribed clients if their filter matches the message.

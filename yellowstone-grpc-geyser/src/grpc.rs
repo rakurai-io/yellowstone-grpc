@@ -1285,7 +1285,7 @@ impl GrpcService {
     async fn geyser_loop<St>(
         mut messages_rx: St,
         broadcast: SubscriberChannels,
-        _block_reconstruction_tx: mpsc::UnboundedSender<BlockReconstructionMessage>,
+        block_reconstruction_tx: mpsc::UnboundedSender<BlockReconstructionMessage>,
     ) where
         St: BatchStream<Item = Message> + Unpin + Send + 'static,
     {
@@ -1328,12 +1328,23 @@ impl GrpcService {
                 let message_batch_arc = Arc::new(std::mem::take(&mut buffer.message_batch));
                 broadcast.send(CommitmentLevel::Processed, Arc::clone(&message_batch_arc));
                 buffer.message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
-                let _ = message_batch_arc;
+                if block_reconstruction_tx
+                    .send(BlockReconstructionMessage::Batch(message_batch_arc))
+                    .is_ok()
+                {
+                    metrics::block_reconstruction_queue_size_inc();
+                }
             }
 
             if let Some(blockmeta_message) = buffer.blockmeta_batch.take() {
                 metrics::message_queue_size_dec();
-                let _ = blockmeta_message;
+
+                if block_reconstruction_tx
+                    .send(BlockReconstructionMessage::Single(blockmeta_message))
+                    .is_ok()
+                {
+                    metrics::block_reconstruction_queue_size_inc();
+                }
             }
         }
     }
