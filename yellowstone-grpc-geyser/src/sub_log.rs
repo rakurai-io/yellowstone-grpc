@@ -1,6 +1,6 @@
 //! Detailed per-client subscription logging, built only with the `sub-log` feature.
 //!
-//! Every accepted or rejected `SubscribeRequest` is logged under the `sub_log` target with the
+//! Every accepted or rejected `SubscribeRequest` is logged under the `yellowstone_grpc_geyser::sub_log` target with the
 //! client's peer address and each filter in full: which accounts/owners, which data filters,
 //! commitment and data slices.
 
@@ -15,7 +15,9 @@ use {
     },
 };
 
-const TARGET: &str = "sub_log";
+// The default module target, `yellowstone_grpc_geyser::sub_log`, so a grep for either
+// `yellowstone` or `sub_log` in the validator log finds these lines.
+const TARGET: &str = module_path!();
 
 /// Where the client connects from: the TCP peer, plus any proxy-provided headers.
 #[derive(Debug, Clone)]
