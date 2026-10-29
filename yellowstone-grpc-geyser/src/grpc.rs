@@ -2254,6 +2254,12 @@ impl Geyser for GrpcService {
             return Err(Status::unavailable("server is shutting down"));
         }
 
+        #[cfg(feature = "sub-log")]
+        let sub_log_peer =
+            crate::sub_log::ClientPeer::new(request.remote_addr(), request.metadata());
+        #[cfg(feature = "sub-log")]
+        crate::sub_log::log_connected(&subscriber_id, id, &sub_log_peer);
+
         let x_request_snapshot = request.metadata().contains_key("x-request-snapshot");
         let snapshot_rx = if x_request_snapshot {
             self.snapshot_rx.lock().await.take()
@@ -2333,7 +2339,14 @@ impl Geyser for GrpcService {
                         Ok(Some(request)) => {
                             filter_names.try_clean();
 
-                            if let Err(error) = match Filter::new(&request, &config_filter_limits, &mut filter_names) {
+                            let filter = Filter::new(&request, &config_filter_limits, &mut filter_names);
+                            #[cfg(feature = "sub-log")]
+                            match &filter {
+                                Ok(filter) if filter.get_pong_msg().is_some() => {}
+                                Ok(_) => crate::sub_log::log_subscribe_request(&subscriber_id, id, &sub_log_peer, &request, None),
+                                Err(error) => crate::sub_log::log_subscribe_request(&subscriber_id, id, &sub_log_peer, &request, Some(&error.to_string())),
+                            }
+                            if let Err(error) = match filter {
                                 Ok(filter) => {
                                     if let Some(msg) = filter.get_pong_msg() {
                                         if incoming_stream_tx.send(Ok(msg)).await.is_err() {

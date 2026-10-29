@@ -116,9 +116,10 @@ impl BlockContent {
         block_footer: true,
     };
 
-    /// Account (Processed only), Slot and BlockMeta.
+    /// Account, Slot and BlockMeta at every commitment. A bank seals at BlockMeta: every
+    /// account write of a bank is delivered before it.
     pub const LIGHT: Self = Self {
-        accounts: false,
+        accounts: true,
         transactions: false,
         entries: false,
         block_footer: false,
@@ -1548,14 +1549,14 @@ mod tests {
     }
 
     #[test]
-    fn light_content_seals_without_transactions_entries_or_account_data() {
+    fn light_content_seals_without_transactions_entries_or_footer() {
         let mut storage = BlockMachineStorage::with_content(0, BlockContent::LIGHT);
         let bank_id = 1;
+        let pubkey = Pubkey::new_unique();
         storage.add(make_created_bank_msg(1, Some(0), bank_id));
         add_musthave_sysvars(&mut storage, 1, bank_id);
-        storage.add(make_account_msg(1, bank_id, Pubkey::new_unique(), 1));
-        assert!(storage.banks[&bank_id].accounts.is_empty());
-        assert!(storage.banks[&bank_id].original_messages.len() == 1);
+        storage.add(make_account_msg(1, bank_id, pubkey, 1));
+        storage.add(make_account_msg(1, bank_id, pubkey, 2));
         // Alpenglow clock written, but no footer notifications: must not wait for one.
         storage.add(make_account_msg(1, bank_id, *ALPENGLOW_CLOCK_ACCOUNT, 1));
         storage.add(make_block_meta_msg_with_counts(1, 0, bank_id, 5, 64));
@@ -1567,10 +1568,8 @@ mod tests {
             SlotStatus::Processed,
             bank_id,
         ));
-        let (update, frozen) = storage.pop_ready_block().expect("Processed delivered");
+        let (update, _) = storage.pop_ready_block().expect("Processed delivered");
         assert_eq!(update.commitment, CommitmentLevel::Processed);
-        assert!(frozen.messages().is_empty());
-        assert_eq!(frozen.get_block_meta().entries_count, 64);
 
         storage.add(make_commitment_msg(
             1,
@@ -1578,8 +1577,44 @@ mod tests {
             SlotStatus::Confirmed,
             bank_id,
         ));
-        let (update, _) = storage.pop_ready_block().expect("Confirmed delivered");
+        let (update, frozen) = storage.pop_ready_block().expect("Confirmed delivered");
         assert_eq!(update.commitment, CommitmentLevel::Confirmed);
+        assert_eq!(frozen.get_block_meta().entries_count, 64);
+        // Accounts are kept for Confirmed/Finalized delivery, deduped to the latest write.
+        let accounts = frozen
+            .messages()
+            .iter()
+            .filter_map(|message| match message {
+                Message::Account(account) if account.account.pubkey == pubkey => {
+                    Some(account.account.write_version)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(accounts, vec![2]);
+    }
+
+    #[test]
+    fn content_without_accounts_keeps_only_musthave_sysvar_tracking() {
+        let content = BlockContent {
+            accounts: false,
+            ..BlockContent::LIGHT
+        };
+        let mut storage = BlockMachineStorage::with_content(0, content);
+        let bank_id = 1;
+        storage.add(make_created_bank_msg(1, Some(0), bank_id));
+        add_musthave_sysvars(&mut storage, 1, bank_id);
+        storage.add(make_account_msg(1, bank_id, Pubkey::new_unique(), 1));
+        assert!(storage.banks[&bank_id].accounts.is_empty());
+        storage.add(make_block_meta_msg_with_counts(1, 0, bank_id, 5, 64));
+        storage.add(make_commitment_msg(
+            1,
+            Some(0),
+            SlotStatus::Processed,
+            bank_id,
+        ));
+        let (_, frozen) = storage.pop_ready_block().expect("Processed delivered");
+        assert!(frozen.messages().is_empty());
     }
 
     #[test]

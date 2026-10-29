@@ -19,6 +19,8 @@ name = "config-check"
 [features]
 default = []
 bench = ["dep:solana-storage-proto"]
+# Log every client's peer address and subscription filters in detail (log target `sub_log`).
+sub-log = []
 
 [dependencies]
 foldhash = { workspace = true }

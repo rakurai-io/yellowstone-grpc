@@ -11,6 +11,8 @@ pub mod metrics;
 pub mod plugin;
 pub mod ratelimit;
 pub mod stream;
+#[cfg(feature = "sub-log")]
+pub mod sub_log;
 pub mod util;
 pub mod version;
 pub use agave_geyser_plugin_interface as plugin_interface;
