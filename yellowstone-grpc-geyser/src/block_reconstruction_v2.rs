@@ -93,6 +93,38 @@ const STALE_SLOT_THRESHOLD: Slot = 300;
 // negligible relative to normal message volume.
 const STALE_GC_INTERVAL: Slot = 50;
 
+/// Which bank content the plugin receives from geyser and keeps per bank. A bank must never
+/// wait at seal time for content geyser does not deliver: `try_seal` compares against the
+/// counts in `BlockMeta`, so with transactions or entries disabled no bank would ever seal
+/// and every bank's buffered accounts would be held until `sweep_stale_slots`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockContent {
+    /// Keep account updates in the bank so they are delivered at Confirmed/Finalized and in
+    /// `Message::Block`. When unset, accounts only stream at Processed and a bank tracks
+    /// nothing but its must-have sysvars.
+    pub accounts: bool,
+    pub transactions: bool,
+    pub entries: bool,
+    pub block_footer: bool,
+}
+
+impl BlockContent {
+    pub const FULL: Self = Self {
+        accounts: true,
+        transactions: true,
+        entries: true,
+        block_footer: true,
+    };
+
+    /// Account (Processed only), Slot and BlockMeta.
+    pub const LIGHT: Self = Self {
+        accounts: false,
+        transactions: false,
+        entries: false,
+        block_footer: false,
+    };
+}
+
 enum TrySealError {
     NotSealable,
     AlreadySealed,
@@ -106,6 +138,7 @@ enum TrySealError {
 struct BankBuffer {
     bank_id: BankId,
     slot: Slot,
+    content: BlockContent,
     parent_slot: Option<Slot>,
     // The bank's `CreatedBank` status, kept to replay it. We do not assume the first event
     // seen for a bank_id is `CreatedBank` -- the bank's construction-time account writes
@@ -127,21 +160,23 @@ struct BankBuffer {
 }
 
 impl BankBuffer {
-    fn new(bank_id: BankId, slot: Slot) -> Self {
+    fn new(bank_id: BankId, slot: Slot, content: BlockContent) -> Self {
+        let capacity = |enabled: bool, n: usize| if enabled { n } else { 0 };
         Self {
             bank_id,
             slot,
+            content,
             parent_slot: None,
             created_bank: None,
             musthave_sysvar_accounts_bitmask: 0,
             footer_expected: false,
-            original_messages: Vec::with_capacity(4096),
-            account_write_version_map: FoldHashMap::with_capacity(4096),
+            original_messages: Vec::with_capacity(capacity(content.accounts, 4096)),
+            account_write_version_map: FoldHashMap::with_capacity(capacity(content.accounts, 4096)),
             blockmeta: None,
             footer: None,
-            transactions: Vec::with_capacity(4096),
-            accounts: Vec::with_capacity(4096),
-            entries: Vec::with_capacity(64),
+            transactions: Vec::with_capacity(capacity(content.transactions, 4096)),
+            accounts: Vec::with_capacity(capacity(content.accounts, 4096)),
+            entries: Vec::with_capacity(capacity(content.entries, 64)),
             is_sealed: false,
         }
     }
@@ -149,15 +184,6 @@ impl BankBuffer {
     fn add_event(&mut self, event: Message) {
         match &event {
             Message::Account(message_account) => {
-                let write_version = message_account.account.write_version;
-                self.account_write_version_map
-                    .entry(message_account.account.pubkey)
-                    .and_modify(|entry| {
-                        if *entry < write_version {
-                            *entry = write_version;
-                        }
-                    })
-                    .or_insert(write_version);
                 if let Some(position) = MUST_HAVE_SYSVAR_ACCOUNTS
                     .iter()
                     .position(|pubkey| pubkey == &message_account.account.pubkey)
@@ -167,6 +193,18 @@ impl BankBuffer {
                 if message_account.account.pubkey == *ALPENGLOW_CLOCK_ACCOUNT {
                     self.footer_expected = true;
                 }
+                if !self.content.accounts {
+                    return;
+                }
+                let write_version = message_account.account.write_version;
+                self.account_write_version_map
+                    .entry(message_account.account.pubkey)
+                    .and_modify(|entry| {
+                        if *entry < write_version {
+                            *entry = write_version;
+                        }
+                    })
+                    .or_insert(write_version);
                 self.accounts.push(Arc::clone(message_account));
             }
             Message::Transaction(message_transaction) => {
@@ -204,15 +242,15 @@ impl BankBuffer {
         };
 
         let expected_txn_count = blockmeta.executed_transaction_count as usize;
-        if self.transactions.len() < expected_txn_count {
+        if self.content.transactions && self.transactions.len() < expected_txn_count {
             return Err(TrySealError::NotSealable);
         }
 
         let expected_entry_count = blockmeta.entries_count as usize;
-        if self.entries.len() < expected_entry_count {
+        if self.content.entries && self.entries.len() < expected_entry_count {
             return Err(TrySealError::NotSealable);
         }
-        if self.footer_expected && self.footer.is_none() {
+        if self.content.block_footer && self.footer_expected && self.footer.is_none() {
             return Err(TrySealError::NotSealable);
         }
         self.is_sealed = true;
@@ -257,7 +295,9 @@ impl BankBuffer {
             dedup_messages.push(message);
         }
 
-        if self.transactions.len() != block_meta.executed_transaction_count as usize {
+        if self.content.transactions
+            && self.transactions.len() != block_meta.executed_transaction_count as usize
+        {
             metrics::incr_geyser_block_mismatch_transaction();
             log::warn!(
                 "Block meta transaction count {} does not match actual transaction count {} for slot {}",
@@ -460,6 +500,7 @@ pub struct BlockMachineStorage {
     replayed_slot: BTreeMap<Slot, Vec<Arc<FrozenBank>>>,
     ready_queue: VecDeque<(SlotCommitmentStatusUpdate, Arc<FrozenBank>)>,
     replayed_capacity: usize,
+    content: BlockContent,
     num_buffered_finalized_slot: usize,
     min_slot: Option<Slot>,
     // Highest slot number observed across any message so far, and the value it had at the
@@ -470,7 +511,12 @@ pub struct BlockMachineStorage {
 }
 
 impl BlockMachineStorage {
+    #[cfg(test)]
     pub fn new(replayed_capacity: usize) -> Self {
+        Self::with_content(replayed_capacity, BlockContent::FULL)
+    }
+
+    pub fn with_content(replayed_capacity: usize, content: BlockContent) -> Self {
         Self {
             banks: FoldHashMap::with_capacity(replayed_capacity),
             slot_to_banks: FoldHashMap::with_capacity(replayed_capacity),
@@ -482,6 +528,7 @@ impl BlockMachineStorage {
             replayed_slot: BTreeMap::new(),
             ready_queue: VecDeque::with_capacity(replayed_capacity),
             replayed_capacity,
+            content,
             num_buffered_finalized_slot: 0,
             min_slot: None,
             max_slot_seen: 0,
@@ -597,7 +644,7 @@ impl BlockMachineStorage {
         let bank = self
             .banks
             .entry(bank_id)
-            .or_insert_with(|| BankBuffer::new(bank_id, slot));
+            .or_insert_with(|| BankBuffer::new(bank_id, slot, self.content));
         bank.add_event(Message::Slot(Arc::clone(message_slot)));
         if bank.parent_slot.is_none() {
             bank.parent_slot = message_slot.parent;
@@ -997,7 +1044,7 @@ impl BlockMachineStorage {
         let bank = self
             .banks
             .entry(bank_id)
-            .or_insert_with(|| BankBuffer::new(bank_id, slot));
+            .or_insert_with(|| BankBuffer::new(bank_id, slot, self.content));
         bank.add_event(message);
         self.try_seal_bank(bank_id);
     }
@@ -1015,7 +1062,7 @@ impl BlockMachineStorage {
         let bank = self
             .banks
             .entry(bank_id)
-            .or_insert_with(|| BankBuffer::new(bank_id, slot));
+            .or_insert_with(|| BankBuffer::new(bank_id, slot, self.content));
         if bank.parent_slot.is_none() {
             bank.parent_slot = Some(block_meta.parent_slot);
         }
@@ -1038,7 +1085,7 @@ impl BlockMachineStorage {
         let bank = self
             .banks
             .entry(bank_id)
-            .or_insert_with(|| BankBuffer::new(bank_id, slot));
+            .or_insert_with(|| BankBuffer::new(bank_id, slot, self.content));
         bank.footer = Some(block_footer);
         self.try_seal_bank(bank_id);
     }
@@ -1457,6 +1504,82 @@ mod tests {
             .transaction
             .get_pre_encoded()
             .is_some());
+    }
+
+    fn make_block_meta_msg_with_counts(
+        slot: u64,
+        parent_slot: u64,
+        bank_id: BankId,
+        executed_transaction_count: u64,
+        entries_count: u64,
+    ) -> Message {
+        Message::BlockMeta(Arc::new(MessageBlockMeta::from_update_oneof(
+            SubscribeUpdateBlockMeta {
+                slot,
+                parent_slot,
+                blockhash: Hash::new_unique().to_string(),
+                parent_blockhash: String::new(),
+                rewards: None,
+                block_time: None,
+                block_height: None,
+                executed_transaction_count,
+                entries_count,
+                bank_id,
+            },
+            ts(),
+        )))
+    }
+
+    #[test]
+    fn full_content_does_not_seal_without_transactions_and_entries() {
+        let mut storage = BlockMachineStorage::new(10);
+        let bank_id = 1;
+        storage.add(make_created_bank_msg(1, Some(0), bank_id));
+        add_musthave_sysvars(&mut storage, 1, bank_id);
+        storage.add(make_block_meta_msg_with_counts(1, 0, bank_id, 5, 64));
+        storage.add(make_commitment_msg(
+            1,
+            Some(0),
+            SlotStatus::Processed,
+            bank_id,
+        ));
+        assert!(storage.pop_ready_block().is_none());
+        assert!(storage.banks.contains_key(&bank_id));
+    }
+
+    #[test]
+    fn light_content_seals_without_transactions_entries_or_account_data() {
+        let mut storage = BlockMachineStorage::with_content(0, BlockContent::LIGHT);
+        let bank_id = 1;
+        storage.add(make_created_bank_msg(1, Some(0), bank_id));
+        add_musthave_sysvars(&mut storage, 1, bank_id);
+        storage.add(make_account_msg(1, bank_id, Pubkey::new_unique(), 1));
+        assert!(storage.banks[&bank_id].accounts.is_empty());
+        assert!(storage.banks[&bank_id].original_messages.len() == 1);
+        // Alpenglow clock written, but no footer notifications: must not wait for one.
+        storage.add(make_account_msg(1, bank_id, *ALPENGLOW_CLOCK_ACCOUNT, 1));
+        storage.add(make_block_meta_msg_with_counts(1, 0, bank_id, 5, 64));
+        assert!(!storage.banks.contains_key(&bank_id), "bank must seal");
+
+        storage.add(make_commitment_msg(
+            1,
+            Some(0),
+            SlotStatus::Processed,
+            bank_id,
+        ));
+        let (update, frozen) = storage.pop_ready_block().expect("Processed delivered");
+        assert_eq!(update.commitment, CommitmentLevel::Processed);
+        assert!(frozen.messages().is_empty());
+        assert_eq!(frozen.get_block_meta().entries_count, 64);
+
+        storage.add(make_commitment_msg(
+            1,
+            Some(0),
+            SlotStatus::Confirmed,
+            bank_id,
+        ));
+        let (update, _) = storage.pop_ready_block().expect("Confirmed delivered");
+        assert_eq!(update.commitment, CommitmentLevel::Confirmed);
     }
 
     #[test]

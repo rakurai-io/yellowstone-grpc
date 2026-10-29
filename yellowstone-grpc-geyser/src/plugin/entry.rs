@@ -1,5 +1,6 @@
 use {
     crate::{
+        block_reconstruction_v2::{BlockContent, MUST_HAVE_SYSVAR_ACCOUNTS},
         config::Config,
         contact_info::ContactInfoNotification,
         file_watcher::FileWatcher,
@@ -41,6 +42,10 @@ use {
     tokio_rustls::rustls,
     tokio_util::{sync::CancellationToken, task::TaskTracker},
 };
+
+/// Bank content requested from geyser, shared with block reconstruction so a bank never
+/// waits to seal on notifications that are disabled here.
+pub const GEYSER_BLOCK_CONTENT: BlockContent = BlockContent::LIGHT;
 
 #[derive(Debug)]
 pub struct PluginInner {
@@ -308,13 +313,21 @@ impl GeyserPlugin for Plugin {
                 }
             }
 
-            let message = Message::Account(Arc::new(MessageAccount::from_geyser(
-                account,
-                slot,
-                false,
-                Some(bank_id),
-            )));
-            inner.send_message(message);
+            // Block reconstruction needs these to seal a bank, and Clock/SlotHashes are
+            // written only once, before CreatedBank: dropping them while nobody is
+            // subscribed would leave the bank in progress when a client connects unsealed.
+            let is_musthave_sysvar = MUST_HAVE_SYSVAR_ACCOUNTS
+                .iter()
+                .any(|pubkey| pubkey.as_ref() == account.pubkey);
+            if is_musthave_sysvar || inner.broadcast_channel.has_subscriber() {
+                let message = Message::Account(Arc::new(MessageAccount::from_geyser(
+                    account,
+                    slot,
+                    false,
+                    Some(bank_id),
+                )));
+                inner.send_message(message);
+            }
             Ok(())
         })
     }
@@ -671,23 +684,23 @@ impl GeyserPlugin for Plugin {
     }
 
     fn transaction_notifications_enabled(&self) -> bool {
-        true
+        GEYSER_BLOCK_CONTENT.transactions
     }
 
     fn entry_notifications_enabled(&self) -> bool {
-        true
+        GEYSER_BLOCK_CONTENT.entries
     }
 
     fn deshred_transaction_notifications_enabled(&self) -> bool {
-        true
+        false
     }
 
     fn deshred_transaction_alt_resolution_enabled(&self) -> bool {
-        true
+        false
     }
 
     fn block_footer_notifications_enabled(&self) -> bool {
-        true
+        GEYSER_BLOCK_CONTENT.block_footer
     }
 }
 

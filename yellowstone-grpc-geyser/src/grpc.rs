@@ -5,7 +5,7 @@ use {
             TrustedMetadataAuthenticator,
         },
         billing::{BillingMeteredManager, HttpBillingEventSink},
-        block_reconstruction_v2::BlockMachineStorage,
+        block_reconstruction_v2::{BlockContent, BlockMachineStorage},
         config::{AuthConfig, AuthKind, BillingConfig, ConfigGrpc, GrpcAddress, GrpcTlsConfig},
         contact_info::{self, ContactInfoState},
         file_watcher::FileWatcher,
@@ -15,6 +15,7 @@ use {
             subscription_limit_exceeded_inc,
         },
         plugin::{
+            entry::GEYSER_BLOCK_CONTENT,
             filter::{
                 limits::FilterLimits,
                 message::{
@@ -378,6 +379,12 @@ impl SubscriberChannels {
     #[inline]
     pub fn send(&self, commitment: CommitmentLevel, messages: BroadcastedMessage) {
         let _ = self.sender(commitment).send(messages);
+    }
+
+    pub fn has_subscriber(&self) -> bool {
+        self.processed.receiver_count() > 0
+            || self.confirmed.receiver_count() > 0
+            || self.finalized.receiver_count() > 0
     }
 
     #[inline]
@@ -1185,6 +1192,7 @@ impl GrpcService {
                     replay_stored_slots_rx,
                     replay_first_available_slot,
                     config.replay_stored_slots,
+                    GEYSER_BLOCK_CONTENT,
                 )
                 .await;
             });
@@ -1431,13 +1439,15 @@ impl GrpcService {
         replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
         replay_first_available_slot: Option<Arc<AtomicU64>>,
         replay_stored_slots: u64,
+        block_content: BlockContent,
     ) where
         St: BatchStream<Item = BlockReconstructionMessage> + Unpin + Send + 'static,
     {
         let (_tx, rx) = mpsc::channel(1);
         let mut replay_stored_slots_rx = replay_stored_slots_rx.unwrap_or(rx);
 
-        let mut block_machine = BlockMachineStorage::new(replay_stored_slots as usize);
+        let mut block_machine =
+            BlockMachineStorage::with_content(replay_stored_slots as usize, block_content);
         const ALL_COMMITMENT_LEVELS: [CommitmentLevel; 3] = [
             CommitmentLevel::Processed,
             CommitmentLevel::Confirmed,
@@ -3549,6 +3559,7 @@ mod tests {
                 Some(replay_rx),
                 None,
                 100,
+                BlockContent::FULL,
             ));
             let send = |messages: Vec<Message>| {
                 for message in messages {
@@ -3737,6 +3748,7 @@ mod tests {
                 replay_rx,
                 None,
                 100,
+                BlockContent::FULL,
             ));
             Harness {
                 messages_tx,
